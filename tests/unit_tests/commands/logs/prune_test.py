@@ -15,15 +15,15 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 
-def test_prune_cutoff_is_naive_utc() -> None:
+def test_prune_cutoff_is_timezone_aware_utc() -> None:
     """
-    The retention cutoff is a naive UTC datetime matching how Log.dttm is
-    stored (datetime.utcnow, no tzinfo). Using a timezone-aware cutoff would
-    raise "operator does not exist: timestamp without time zone" on PostgreSQL.
+    The retention cutoff must be a timezone-aware UTC datetime
+    (using ``datetime.now(tz=timezone.utc)``), not the deprecated
+    ``datetime.utcnow()`` which returns a naive datetime.
     """
     from superset.commands.logs.prune import LogPruneCommand
 
@@ -46,9 +46,10 @@ def test_prune_cutoff_is_naive_utc() -> None:
         LogPruneCommand(retention_period_days=30).run()
 
     cutoff = captured["cutoff"]
-    # The cutoff must be timezone-naive to match Log.dttm column type.
-    assert cutoff.tzinfo is None
+    # The cutoff must be timezone-aware (UTC).
+    assert cutoff.tzinfo is not None
+    assert cutoff.tzinfo == timezone.utc
 
-    expected = datetime.utcnow() - timedelta(days=30)
+    expected = datetime.now(tz=timezone.utc) - timedelta(days=30)
     # Allow a small delta for execution time between computing the two values.
     assert abs((cutoff - expected).total_seconds()) < 60
