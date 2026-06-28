@@ -15,15 +15,18 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 
 def test_prune_cutoff_is_naive_utc() -> None:
     """
     The retention cutoff is a naive UTC datetime matching how Log.dttm is
-    stored (datetime.utcnow, no tzinfo). Using a timezone-aware cutoff would
-    raise "operator does not exist: timestamp without time zone" on PostgreSQL.
+    stored (no tzinfo). Using a timezone-aware cutoff would raise
+    "operator does not exist: timestamp without time zone" on PostgreSQL.
+
+    datetime.now(timezone.utc).replace(tzinfo=None) is used instead of the
+    deprecated datetime.utcnow().
     """
     from superset.commands.logs.prune import LogPruneCommand
 
@@ -49,6 +52,32 @@ def test_prune_cutoff_is_naive_utc() -> None:
     # The cutoff must be timezone-naive to match Log.dttm column type.
     assert cutoff.tzinfo is None
 
-    expected = datetime.utcnow() - timedelta(days=30)
+    expected = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
     # Allow a small delta for execution time between computing the two values.
     assert abs((cutoff - expected).total_seconds()) < 60
+
+
+def test_prune_does_not_use_deprecated_utcnow() -> None:
+    """
+    Verify that LogPruneCommand does not call the deprecated
+    datetime.utcnow(); it should use datetime.now(timezone.utc) instead.
+    """
+    from superset.commands.logs.prune import LogPruneCommand
+
+    session = MagicMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    session.execute.return_value = result
+
+    with (
+        patch("superset.commands.logs.prune.db") as mock_db,
+        patch("superset.commands.logs.prune.datetime") as mock_dt,
+    ):
+        mock_db.session = session
+        # Let datetime.now() return a real datetime so arithmetic works.
+        mock_dt.now.return_value = datetime.now(timezone.utc)
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        LogPruneCommand(retention_period_days=30).run()
+
+    mock_dt.now.assert_called_once_with(timezone.utc)
+    mock_dt.utcnow.assert_not_called()
